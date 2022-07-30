@@ -12,11 +12,15 @@ import ExtCommon "./motoko/ext/Common";
 import ExtAllowance "./motoko/ext/Allowance";
 import ExtNonFungible "./motoko/ext/NonFungible";
 
+
+import Text "mo:base/Text";
 import Array "mo:base/Array";
 import Nat "mo:base/Nat";
 import Hash "mo:base/Hash";
 import List "mo:base/List";
 import Blob "mo:base/Blob";
+import Buffer "mo:base/Buffer";
+
 
 shared (install) actor class attendance_nft() = this {
   
@@ -46,7 +50,7 @@ shared (install) actor class attendance_nft() = this {
     datetime: Int;
     location: Text;
     host: Text;
-    asset: ?Blob;
+    asset: Text;
     claimcode: Text;
     status: {
       #new;
@@ -73,6 +77,9 @@ shared (install) actor class attendance_nft() = this {
   private stable var _eventCollectionState : [(EVENTID, EventCollection)] = [];
   private var _eventCollections : HashMap.HashMap<EVENTID, EventCollection> = HashMap.fromIter(_eventCollectionState.vals(), 0, Nat.equal, Hash.hash);
 
+  private stable var _eventAttendanceState : [(EVENTID,[Principal])] = [];
+  private var _eventAttendance : HashMap.HashMap<EVENTID, [Principal]> = HashMap.fromIter(_eventAttendanceState.vals(), 0, Nat.equal, Hash.hash);
+
   private stable var _supply : Balance  = 0;
   private stable var _minter : Principal  = install.caller;
   private stable var _minters : [Principal] = [];
@@ -90,6 +97,8 @@ shared (install) actor class attendance_nft() = this {
 
     _minters := List.toArray(minters); 
     _eventCollectionState := Iter.toArray(_eventCollections.entries());
+    _eventAttendanceState := Iter.toArray(_eventAttendance.entries());
+
   };
 
   system func postupgrade() {
@@ -99,7 +108,7 @@ shared (install) actor class attendance_nft() = this {
 
     _minters := [];
     _eventCollectionState := [];
-
+    _eventAttendanceState := [];
   };
 
 	public shared(msg) func setMinter(minter : Principal) : async () {
@@ -135,6 +144,11 @@ shared (install) actor class attendance_nft() = this {
       };
     };
     
+  };
+
+
+  public shared(msg) func checkANFT(eid: Nat): async ?EventCollection{
+    _eventCollections.get(eid);
   };
 
   public shared(msg) func openClaim(eid: EVENTID): async Result.Result<Nat, Text>{
@@ -200,10 +214,17 @@ shared (install) actor class attendance_nft() = this {
           if(event.status == #ready){
 
             if(event.claimcode == code){
-              #ok(_mint({
-                to = #principal(msg.caller);
-                metadata = event.asset;
-              }));
+              let isAttend = _attend(eid,msg.caller);
+              if(isAttend){
+                #ok(_mint({
+                  to = #principal(msg.caller);
+                  metadata = ?Text.encodeUtf8(event.asset);
+                }));
+
+              }else{
+                #err("you already claimed!")
+              }
+
             }else{
               #err("wrong code")
             };
@@ -218,6 +239,7 @@ shared (install) actor class attendance_nft() = this {
     };
    
   };
+  
   
   public shared(msg) func transfer(request: TransferRequest) : async TransferResponse {
     if (request.amount != 1) {
@@ -402,5 +424,35 @@ shared (install) actor class attendance_nft() = this {
 		_supply := _supply + 1;
 		_nextTokenId := _nextTokenId + 1;
     token;
+  };
+
+  private func _attend(eid: EVENTID, principal: Principal): Bool{
+    let ps = _eventAttendance.get(eid);
+    switch(ps){
+      case(?ps){
+        let fp = Array.find<Principal>(ps, func(p: Principal):Bool{
+          p == principal
+        });
+        switch(fp){
+          case(?fp){
+            false;
+          };
+          case(_){
+            let pb = Buffer.Buffer<Principal>(ps.size());
+            for(p in ps.vals()){
+              pb.add(p);
+            };
+            pb.add(principal);
+            _eventAttendance.put(eid, pb.toArray());
+            true;
+          }
+        }
+        
+      };
+      case(_){
+        _eventAttendance.put(eid,[principal]);
+        true
+      };
+    };
   };
 }
