@@ -59,6 +59,19 @@ shared (install) actor class attendance_nft() = this {
     };
   };
   
+  type Inventory = {
+    token: TokenIndex;
+    event: EventCollection;
+  };
+
+  type SearchCritera = {
+    #eventid: EVENTID;
+    #owner: {
+      #principal: Principal;
+      #address: AccountIdentifier;
+    }
+  };
+
   private let EXTENSIONS : [Extension] = ["@ext/common", "@ext/allowance", "@ext/nonfungible"];
   
   //State work
@@ -80,6 +93,9 @@ shared (install) actor class attendance_nft() = this {
   private stable var _eventAttendanceState : [(EVENTID,[Principal])] = [];
   private var _eventAttendance : HashMap.HashMap<EVENTID, [Principal]> = HashMap.fromIter(_eventAttendanceState.vals(), 0, Nat.equal, Hash.hash);
 
+  private stable var _inventoryState : [(Principal,[Inventory])] = [];
+  private var _inventory : HashMap.HashMap<Principal, [Inventory]> = HashMap.fromIter(_inventoryState.vals(), 0, Principal.equal, Principal.hash);
+
   private stable var _supply : Balance  = 0;
   private stable var _minter : Principal  = install.caller;
   private stable var _minters : [Principal] = [];
@@ -99,6 +115,8 @@ shared (install) actor class attendance_nft() = this {
     _eventCollectionState := Iter.toArray(_eventCollections.entries());
     _eventAttendanceState := Iter.toArray(_eventAttendance.entries());
 
+    _inventoryState := Iter.toArray(_inventory.entries());
+
   };
 
   system func postupgrade() {
@@ -109,6 +127,7 @@ shared (install) actor class attendance_nft() = this {
     _minters := [];
     _eventCollectionState := [];
     _eventAttendanceState := [];
+    _inventoryState := [];
   };
 
 	public shared(msg) func setMinter(minter : Principal) : async () {
@@ -216,10 +235,35 @@ shared (install) actor class attendance_nft() = this {
             if(event.claimcode == code){
               let isAttend = _attend(eid,msg.caller);
               if(isAttend){
-                #ok(_mint({
+                let tokenIndex = _mint({
                   to = #principal(msg.caller);
                   metadata = ?Text.encodeUtf8(event.asset);
-                }));
+                });
+                //save inventory
+                let userInventory = _inventory.get(msg.caller);
+                switch(userInventory){
+                  case(?userInventory){
+                  let pb = Buffer.Buffer<Inventory>(userInventory.size());
+                    for(p in userInventory.vals()){
+                      pb.add(p);
+                    };
+                    pb.add({
+                      token=tokenIndex;
+                      event=event;
+                    });
+                    _inventory.put(msg.caller, pb.toArray());
+                  };
+                  case(_){
+                    let pb = Buffer.Buffer<Inventory>(0);
+                    pb.add({
+                      token=tokenIndex;
+                      event=event;
+                    });
+                    _inventory.put(msg.caller, pb.toArray());
+                  };
+                };              
+
+                #ok(tokenIndex);
 
               }else{
                 #err("you already claimed!")
@@ -240,6 +284,14 @@ shared (install) actor class attendance_nft() = this {
    
   };
   
+  public query(msg) func inventory(): async [Inventory]{
+    let ins = _inventory.get(msg.caller);
+    switch(ins){
+      case(?ins){ins};
+      case(_)[];
+    };
+    
+  };
   
   public shared(msg) func transfer(request: TransferRequest) : async TransferResponse {
     if (request.amount != 1) {
@@ -299,6 +351,8 @@ shared (install) actor class attendance_nft() = this {
       };
     };
   };
+
+
 
   public query func getMinter() : async Principal {
     _minter;
